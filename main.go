@@ -3,18 +3,22 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/shadowsocks/go-shadowsocks2/core"
+	"github.com/shadowsocks/go-shadowsocks2/model"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
 )
 
@@ -71,6 +75,10 @@ func main() {
 		io.ReadFull(rand.Reader, key)
 		fmt.Println(base64.URLEncoding.EncodeToString(key))
 		return
+	}
+
+	if err := model.InitDB(); err != nil {
+		log.Fatal(err)
 	}
 
 	if flags.Client == "" && flags.Server == "" {
@@ -185,6 +193,58 @@ func main() {
 			go tcpRemote(addr, ciph.StreamConn)
 		}
 	}
+
+	http.HandleFunc("/log", func(w http.ResponseWriter, r *http.Request) {
+		connLogMu.Lock()
+		defer connLogMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(connLog)
+	})
+
+	http.HandleFunc("/location", func(w http.ResponseWriter, r *http.Request) {
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 20
+		}
+		locations, total, err := model.ListLocationsOrderByUpdatedAt(offset, limit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if locations == nil {
+			locations = []model.Location{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"locations": locations,
+			"total":     total,
+		})
+	})
+
+	http.HandleFunc("/log/stat", func(w http.ResponseWriter, r *http.Request) {
+		ip := r.URL.Query().Get("ip")
+		dateStr := r.URL.Query().Get("date")
+		if dateStr == "" {
+			http.Error(w, "date is required", http.StatusBadRequest)
+			return
+		}
+		cst, _ := time.LoadLocation("Asia/Shanghai")
+		date, err := time.ParseInLocation("2006-01-02", dateStr, cst)
+		if err != nil {
+			http.Error(w, "invalid date format, expected YYYY-MM-DD", http.StatusBadRequest)
+			return
+		}
+		counts, err := model.CountLogsByDateByHour(ip, date)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(counts)
+	})
+
+	go http.ListenAndServe(":1024", nil)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

@@ -10,7 +10,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shadowsocks/go-shadowsocks2/model"
 	"github.com/shadowsocks/go-shadowsocks2/socks"
+)
+
+type connInfo struct {
+	Count    int    `json:"count"`
+	LastTime string `json:"last_time"`
+}
+
+var beijingLoc = time.FixedZone("CST", 8*3600)
+
+var (
+	connLog   = make(map[string]connInfo)
+	connLogMu sync.Mutex
 )
 
 // Create a SOCKS server listening on addr and proxy to server.
@@ -108,6 +121,16 @@ func tcpRemote(addr string, shadow func(net.Conn) net.Conn) {
 			continue
 		}
 
+		host, _, err := net.SplitHostPort(c.RemoteAddr().String())
+		if err == nil {
+			connLogMu.Lock()
+			info := connLog[host]
+			info.Count++
+			info.LastTime = time.Now().In(beijingLoc).Format(time.RFC3339)
+			connLog[host] = info
+			connLogMu.Unlock()
+		}
+
 		go func() {
 			defer c.Close()
 			if config.TCPCork {
@@ -137,6 +160,14 @@ func tcpRemote(addr string, shadow func(net.Conn) net.Conn) {
 			logf("proxy %s <-> %s", c.RemoteAddr(), tgt)
 			if err = relay(sc, rc); err != nil {
 				logf("relay error: %v", err)
+			}
+			locationID, err := model.GetOrCreateLocationByIP(host)
+			if err != nil {
+				logf("failed to get or create location for %s: %v", host, err)
+				return
+			}
+			if err := model.CreateLog(&model.Log{IP: host, URL: tgt.String(), LocationID: locationID}); err != nil {
+				logf("failed to create log: %v", err)
 			}
 		}()
 	}
