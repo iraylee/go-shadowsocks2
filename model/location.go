@@ -130,13 +130,13 @@ func GetOrCreateLocationByIP(ip string) (uint, error) {
 	l.Province = province
 	l.Area = area
 	DB.Model(&l).Updates(map[string]any{
-		"country":  country,
-		"city":     city,
-		"isp":      isp,
-		"latitude": lat,
+		"country":   country,
+		"city":      city,
+		"isp":       isp,
+		"latitude":  lat,
 		"longitude": lng,
-		"province": province,
-		"area":     area,
+		"province":  province,
+		"area":      area,
 	})
 	return l.ID, nil
 }
@@ -153,20 +153,33 @@ func DeleteLocation(id uint) error {
 	return DB.Delete(&Location{}, id).Error
 }
 
-func ListLocationsOrderByUpdatedAt(offset, limit int) ([]Location, int64, error) {
+func ListLocationsOrderByUpdatedAt(offset, limit int, date string) ([]Location, int64, error) {
 	var locations []Location
 	var total int64
 	if err := DB.Model(&Location{}).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	err := DB.Table("locations").
-		Select(`locations.id, locations.created_at, locations.updated_at, locations.deleted_at,
+
+	selectSQL := `locations.id, locations.created_at, locations.updated_at, locations.deleted_at,
+		locations.ip, locations.isp, locations.country, locations.province, locations.city, locations.area,
+		locations.latitude, locations.longitude, locations.remark,
+		(SELECT COUNT(*) FROM logs WHERE logs.location_id = locations.id AND logs.deleted_at IS NULL AND DATE(logs.created_at) = CURRENT_DATE) AS log_count`
+
+	query := DB.Table("locations").Select(selectSQL).
+		Offset(offset).Limit(limit).
+		Order("updated_at DESC")
+
+	if date != "" {
+		selectSQL = `locations.id, locations.created_at, locations.updated_at, locations.deleted_at,
 			locations.ip, locations.isp, locations.country, locations.province, locations.city, locations.area,
 			locations.latitude, locations.longitude, locations.remark,
-			(SELECT COUNT(*) FROM logs WHERE logs.location_id = locations.id AND logs.deleted_at IS NULL AND DATE(logs.created_at) = CURRENT_DATE) AS log_count`).
-		Offset(offset).Limit(limit).
-		Order("updated_at DESC").
-		Find(&locations).Error
+			(SELECT COUNT(*) FROM logs WHERE logs.location_id = locations.id AND logs.deleted_at IS NULL AND DATE(logs.created_at) = ?) AS log_count`
+		query = DB.Table("locations").Select(selectSQL, date).
+			Offset(offset).Limit(limit).
+			Order("updated_at DESC")
+	}
+
+	err := query.Find(&locations).Error
 	return locations, total, err
 }
 

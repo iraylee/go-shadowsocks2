@@ -204,10 +204,11 @@ func main() {
 	http.HandleFunc("/location", func(w http.ResponseWriter, r *http.Request) {
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		date := r.URL.Query().Get("date")
 		if limit <= 0 {
-			limit = 20
+			limit = 100
 		}
-		locations, total, err := model.ListLocationsOrderByUpdatedAt(offset, limit)
+		locations, total, err := model.ListLocationsOrderByUpdatedAt(offset, limit, date)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
